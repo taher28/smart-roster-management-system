@@ -457,3 +457,85 @@ describe('Conflict Detection Module', () => {
     expect(offConflict).toBeDefined();
   });
 });
+
+
+describe('Regression: Solver Must Not Report Infeasibility Due to Greedy Failure', () => {
+  it('finds valid assignment when greedy choice would cause false infeasibility', () => {
+    const testEmployees = [
+      { id: 'e1', full_name: 'Employee One', is_active: true },
+      { id: 'e2', full_name: 'Employee Two', is_active: true },
+      { id: 'e3', full_name: 'Employee Three', is_active: true },
+    ];
+    const testBrands = [
+      { id: 'brand-a', name: 'Brand A', is_active: true },
+      { id: 'brand-b', name: 'Brand B', is_active: true },
+      { id: 'brand-c', name: 'Brand C', is_active: true },
+    ];
+    const testProcesses = [{ id: 'proc-cs', code: 'CS', name: 'Customer Support' }];
+    const testBrandProcesses = [
+      { id: 'bp-a', brand_id: 'brand-a', process_id: 'proc-cs', min_staff: 1, calendar_rule: '365_days', is_active: true },
+      { id: 'bp-b', brand_id: 'brand-b', process_id: 'proc-cs', min_staff: 1, calendar_rule: '365_days', is_active: true },
+      { id: 'bp-c', brand_id: 'brand-c', process_id: 'proc-cs', min_staff: 1, calendar_rule: '365_days', is_active: true },
+    ];
+    const testAssignments = [
+      { id: 'a-a1', employee_id: 'e1', brand_process_id: 'bp-a', is_active: true, is_primary: true },
+      { id: 'a-a2', employee_id: 'e2', brand_process_id: 'bp-a', is_active: true, is_primary: false },
+      { id: 'a-b1', employee_id: 'e1', brand_process_id: 'bp-b', is_active: true, is_primary: true },
+      { id: 'a-b3', employee_id: 'e3', brand_process_id: 'bp-b', is_active: true, is_primary: false },
+      { id: 'a-c1', employee_id: 'e1', brand_process_id: 'bp-c', is_active: true, is_primary: true },
+      { id: 'a-c3', employee_id: 'e3', brand_process_id: 'bp-c', is_active: true, is_primary: false },
+    ];
+    const result = generateMonthlyRoster({
+      year: 2026, month: 11,
+      employees: testEmployees, brands: testBrands,
+      processes: testProcesses, brandProcesses: testBrandProcesses,
+      assignments: testAssignments,
+      weeklyOffs: [], holidays: [], leaves: [], availability: [],
+    });
+    expect(result.status).toBe(EngineStatus.FEASIBLE);
+    expect(result.conflicts.length).toBe(0);
+    expect(result.stats.coveragePercentage).toBe(100);
+    for (const dateStr of ['2026-11-02', '2026-11-10', '2026-11-25']) {
+      const dayEntries = result.entries.filter((e) => e.work_date === dateStr);
+      const brandsScheduled = new Set(dayEntries.map((e) => e.brand_id));
+      expect(brandsScheduled.size).toBe(3);
+      const empBrands = new Map();
+      for (const e of dayEntries) {
+        expect(empBrands.has(e.employee_id)).toBe(false);
+        empBrands.set(e.employee_id, e.brand_id);
+      }
+    }
+  });
+});
+
+describe('Regression: Conflict Detection on Completely Empty Dates', () => {
+  it('detects understaffing on dates that have zero roster entries', () => {
+    const brandProcesses = [{ id: 'bp-open', brand_id: 'brand-open', process_id: 'proc-cs', min_staff: 1, calendar_rule: '365_days', is_active: true }];
+    const brands = [{ id: 'brand-open', name: 'Open Brand' }];
+    const processes = [{ id: 'proc-cs', code: 'CS', name: 'Customer Support' }];
+    const conflicts = detectRosterConflicts({
+      entries: [], month: 11, year: 2026,
+      employees: [], brands, processes, brandProcesses,
+      assignments: [], weeklyOffs: [], holidays: [], leaves: [], availability: [],
+    });
+    const understaffed = conflicts.filter((c) => c.code === 'UNDERSTAFFED_PROCESS');
+    expect(understaffed.length).toBe(30);
+    expect(understaffed[0].work_date).toBe('2026-11-01');
+    expect(understaffed[29].work_date).toBe('2026-11-30');
+  });
+
+  it('does not flag closed Sundays as understaffed when entries are empty', () => {
+    const brandProcesses = [{ id: 'bp-nosun', brand_id: 'brand-nosun', process_id: 'proc-cs', min_staff: 1, calendar_rule: 'no_sundays_holidays', is_active: true }];
+    const brands = [{ id: 'brand-nosun', name: 'Weekday Brand' }];
+    const processes = [{ id: 'proc-cs', code: 'CS', name: 'Customer Support' }];
+    const conflicts = detectRosterConflicts({
+      entries: [], month: 11, year: 2026,
+      employees: [], brands, processes, brandProcesses,
+      assignments: [], weeklyOffs: [], holidays: [], leaves: [], availability: [],
+    });
+    const understaffed = conflicts.filter((c) => c.code === 'UNDERSTAFFED_PROCESS');
+    expect(understaffed.length).toBe(25);
+    const sundayConflicts = understaffed.filter((c) => new Date(c.work_date + 'T00:00:00').getDay() === 0);
+    expect(sundayConflicts.length).toBe(0);
+  });
+});

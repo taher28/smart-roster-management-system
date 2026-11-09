@@ -467,104 +467,143 @@ export function generateMonthlyRoster({
      * not a complete solution. Slots already filled by same-brand multi-process
      * coverage are skipped because their requirement is already met.
      */
-    function solveDateSlots(slotIndex) {
-      if (searchLimitReached) return false;
-      if (slotIndex >= dateSlots.length) {
-        recordBest();
-        return true;
-      }
 
-      const slot = dateSlots[slotIndex];
-      if (!slotStillRequired(slot)) {
-        return solveDateSlots(slotIndex + 1);
-      }
-
-      stepsCounter += 1;
-      if (stepsCounter >= searchLimit) {
-        searchLimitReached = true;
-        recordBest();
-        return false;
-      }
-
-      const candidates = getCandidatesForSlot(slot);
-      if (candidates.length === 0) {
-        recordBest();
-        return false;
-      }
-
-      for (const empId of candidates) {
-        const dateEmpKey = `${dateStr}_${empId}`;
-        const bpDateKey = `${dateStr}_${slot.brandProcess.id}`;
-        const prevBrand = employeeDateBrand.get(dateEmpKey);
-        if (prevBrand && prevBrand !== slot.brandId) continue;
-        const isNewToBrand = !prevBrand;
-
-        employeeDateBrand.set(dateEmpKey, slot.brandId);
-        if (!bpAssignedOnDate.has(bpDateKey)) bpAssignedOnDate.set(bpDateKey, new Set());
-        bpAssignedOnDate.get(bpDateKey).add(empId);
-        if (isNewToBrand) {
-          const alreadyListed = scheduledEntries.some(
-            (entry) =>
-              entry.brand_id === slot.brandId &&
-              entry.employee_id === empId &&
-              entry.work_date === dateStr
-          );
-          if (!alreadyListed) {
-            scheduledEntries.push({
-              brand_id: slot.brandId,
-              employee_id: empId,
-              work_date: dateStr,
-            });
-          }
-          employeeShiftCounts.set(empId, (employeeShiftCounts.get(empId) || 0) + 1);
-        }
-
-        const bpsOnBrand = brandProcessByBrand.get(slot.brandId) || [];
-        const autoCoveredBPs = [];
-        for (const otherBP of bpsOnBrand) {
-          if (otherBP.id === slot.brandProcess.id) continue;
-          const otherOpen = isBrandProcessOpenOnDate(
-            otherBP.calendar_rule,
-            dateStr,
-            isDatePublicHoliday(dateStr, slot.brandId, holidays)
-          );
-          if (otherOpen && empAssignedBPs.get(empId)?.has(otherBP.id)) {
-            const otherKey = `${dateStr}_${otherBP.id}`;
-            if (!bpAssignedOnDate.has(otherKey)) bpAssignedOnDate.set(otherKey, new Set());
-            if (!bpAssignedOnDate.get(otherKey).has(empId)) {
-              bpAssignedOnDate.get(otherKey).add(empId);
-              autoCoveredBPs.push(otherBP.id);
-            }
-          }
-        }
-
-        recordBest();
-        const success = solveDateSlots(slotIndex + 1);
-        if (success) return true;
-        undoAssignment(empId, slot, isNewToBrand, autoCoveredBPs);
-        if (searchLimitReached) return false;
-      }
-
-      recordBest();
-      return false;
-    }
-
-    if (dateSlots.length > 0) {
-      recordBest();
-      const solved = solveDateSlots(0);
-      if (!solved) restoreDateSnapshot(bestSnapshot);
-    }
+function solveDateSlots(slotIndex) {
+  if (searchLimitReached) return false;
+  if (slotIndex >= dateSlots.length) {
+    recordBest();
+    return true;
   }
 
-  // Deduplicate scheduledEntries by (brand_id, employee_id, work_date)
-  const uniqueEntriesMap = new Map();
-  for (const entry of scheduledEntries) {
-    const key = `${entry.brand_id}_${entry.employee_id}_${entry.work_date}`;
-    if (!uniqueEntriesMap.has(key)) {
-      uniqueEntriesMap.set(key, entry);
-    }
+  const slot = dateSlots[slotIndex];
+
+  if (!slotStillRequired(slot)) {
+    return solveDateSlots(slotIndex + 1);
   }
-  const finalRosterEntries = Array.from(uniqueEntriesMap.values());
+
+  stepsCounter += 1;
+
+  if (stepsCounter >= searchLimit) {
+    searchLimitReached = true;
+    recordBest();
+    return false;
+  }
+
+  const candidates = getCandidatesForSlot(slot);
+
+  if (candidates.length === 0) {
+    // No eligible candidate is available for this required slot.
+    // Return false so the solver can backtrack and try another assignment.
+  recordBest();
+
+  solveDateSlots(slotIndex + 1);
+    recordBest();
+    return false;
+  }
+
+  for (const empId of candidates) {
+    const dateEmpKey = `${dateStr}_${empId}`;
+    const bpDateKey = `${dateStr}_${slot.brandProcess.id}`;
+    const prevBrand = employeeDateBrand.get(dateEmpKey);
+
+    if (prevBrand && prevBrand !== slot.brandId) continue;
+
+    const isNewToBrand = !prevBrand;
+
+    employeeDateBrand.set(dateEmpKey, slot.brandId);
+
+    if (!bpAssignedOnDate.has(bpDateKey)) {
+      bpAssignedOnDate.set(bpDateKey, new Set());
+    }
+
+    bpAssignedOnDate.get(bpDateKey).add(empId);
+
+    if (isNewToBrand) {
+      const alreadyListed = scheduledEntries.some(
+        (entry) =>
+          entry.brand_id === slot.brandId &&
+          entry.employee_id === empId &&
+          entry.work_date === dateStr
+      );
+
+      if (!alreadyListed) {
+        scheduledEntries.push({
+          brand_id: slot.brandId,
+          employee_id: empId,
+          work_date: dateStr,
+        });
+      }
+
+      employeeShiftCounts.set(
+        empId,
+        (employeeShiftCounts.get(empId) || 0) + 1
+      );
+    }
+
+    const bpsOnBrand = brandProcessByBrand.get(slot.brandId) || [];
+    const autoCoveredBPs = [];
+
+    for (const otherBP of bpsOnBrand) {
+      if (otherBP.id === slot.brandProcess.id) continue;
+
+      const otherOpen = isBrandProcessOpenOnDate(
+        otherBP.calendar_rule,
+        dateStr,
+        isDatePublicHoliday(dateStr, slot.brandId, holidays)
+      );
+
+      if (otherOpen && empAssignedBPs.get(empId)?.has(otherBP.id)) {
+        const otherKey = `${dateStr}_${otherBP.id}`;
+
+        if (!bpAssignedOnDate.has(otherKey)) {
+          bpAssignedOnDate.set(otherKey, new Set());
+        }
+
+        if (!bpAssignedOnDate.get(otherKey).has(empId)) {
+          bpAssignedOnDate.get(otherKey).add(empId);
+          autoCoveredBPs.push(otherBP.id);
+        }
+      }
+    }
+
+    recordBest();
+
+    const success = solveDateSlots(slotIndex + 1);
+
+    if (success) return true;
+
+    // Undo this assignment before trying the next candidate.
+    undoAssignment(empId, slot, isNewToBrand, autoCoveredBPs);
+
+    if (searchLimitReached) return false;
+  }
+
+  recordBest();
+  return false;
+}
+
+if (dateSlots.length > 0) {
+  recordBest();
+
+  const solved = solveDateSlots(0);
+
+  if (!solved) {
+    restoreDateSnapshot(bestSnapshot);
+  }
+}
+}
+// Deduplicate scheduledEntries by (brand_id, employee_id, work_date)
+const uniqueEntriesMap = new Map();
+
+for (const entry of scheduledEntries) {
+  const key = `${entry.brand_id}_${entry.employee_id}_${entry.work_date}`;
+
+  if (!uniqueEntriesMap.has(key)) {
+    uniqueEntriesMap.set(key, entry);
+  }
+}
+
+const finalRosterEntries = Array.from(uniqueEntriesMap.values());
 
   // ----------------------------------------------------------------------------
   // PHASE 4: Build Daily Results and Detect Coverage Conflicts

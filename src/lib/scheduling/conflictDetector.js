@@ -11,6 +11,10 @@
  * - Inactive employee assignments
  * - Assignments to closed brand-processes (holidays/Sundays)
  * - Ineligible employee assignments
+ *
+ * IMPORTANT: Section 4 (understaffed processes) iterates over every calendar
+ * date in the selected month, not just dates that appear in roster entries.
+ * This ensures days with zero roster entries are still flagged as coverage gaps.
  */
 
 import {
@@ -192,7 +196,16 @@ export function detectRosterConflicts({
   }
 
   // 4. Check for Understaffed Open Brand Processes
-  // Map of date_bpId -> assigned count from entries
+  //
+  // IMPORTANT: We iterate over EVERY date in the selected month, not just the
+  // dates that appear in roster entries. A date with zero entries is still an
+  // operational day that may need staff. Deriving dates from entries.map(e=>e.work_date)
+  // misses those completely-empty dates.
+  //
+  // If month/year are not provided we fall back to the unique dates found in entries
+  // so the function degrades gracefully when called without month/year context.
+
+  // Build coverage map from entries
   const coverageMap = new Map();
   for (const entry of entries) {
     const bps = brandProcesses.filter((bp) => bp.brand_id === entry.brand_id && bp.is_active);
@@ -208,8 +221,13 @@ export function detectRosterConflicts({
     }
   }
 
-  // Evaluate every brand process for every date in month
-  const dates = Array.from(new Set(entries.map((e) => e.work_date)));
+  // Use full month calendar when month and year are available.
+  // Fall back to unique entry dates if month/year were not supplied.
+  const dates =
+    month != null && year != null
+      ? getDaysInMonth(year, month)
+      : Array.from(new Set(entries.map((e) => e.work_date)));
+
   for (const dateStr of dates) {
     for (const bp of brandProcesses) {
       if (!bp.is_active) continue;
