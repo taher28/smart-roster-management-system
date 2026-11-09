@@ -16,7 +16,7 @@ export default function Sidebar({ open, onClose }) {
       <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-4">
         <div>
           <p className="text-xs font-semibold tracking-wider text-muted uppercase">
-            Datastraw Technologies
+            Operations System
           </p>
           <div className="flex items-center gap-2 mt-1">
             <h1 className="text-base font-bold text-ink">Smart Roster</h1>

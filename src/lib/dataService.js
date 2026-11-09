@@ -551,55 +551,69 @@ export async function saveRosterVersion({
     created_at: new Date().toISOString(),
   };
 
-  // Try remote Supabase insertion
+  // Try remote Supabase insertion via atomic RPC first, then fallback to multi-table insert
   try {
-    const { data: vData, error: vError } = await supabase
-      .from('roster_versions')
-      .insert([newVersion])
-      .select()
-      .single();
+    const { data: rpcVersionId, error: rpcError } = await supabase.rpc('save_roster_snapshot', {
+      p_version_number: nextVersionNumber,
+      p_roster_month: rosterMonth,
+      p_status: status,
+      p_notes: notes,
+      p_entries: entries,
+      p_day_results: dayResults,
+      p_conflicts: conflicts,
+    });
 
-    if (!vError && vData) {
-      const vId = vData.id;
+    if (!rpcError && rpcVersionId) {
+      newVersion.id = rpcVersionId;
+    } else {
+      const { data: vData, error: vError } = await supabase
+        .from('roster_versions')
+        .insert([newVersion])
+        .select()
+        .single();
 
-      // Batch insert entries
-      const formattedEntries = entries.map((e) => ({
-        version_id: vId,
-        brand_id: e.brand_id,
-        employee_id: e.employee_id,
-        work_date: e.work_date,
-      }));
+      if (!vError && vData) {
+        const vId = vData.id;
 
-      // Batch insert day results
-      const formattedResults = dayResults.map((dr) => ({
-        version_id: vId,
-        brand_process_id: dr.brand_process_id,
-        work_date: dr.work_date,
-        is_open: dr.is_open,
-        required_staff: dr.required_staff,
-        count: dr.count,
-      }));
+        // Batch insert entries
+        const formattedEntries = entries.map((e) => ({
+          version_id: vId,
+          brand_id: e.brand_id,
+          employee_id: e.employee_id,
+          work_date: e.work_date,
+        }));
 
-      // Batch insert conflicts
-      const formattedConflicts = conflicts.map((c) => ({
-        version_id: vId,
-        employee_id: c.employee_id || null,
-        brand_process_id: c.brand_process_id || null,
-        work_date: c.work_date,
-        code: c.code,
-        severity: c.severity,
-        explanation: c.explanation,
-        recommendation: c.recommendation,
-      }));
+        // Batch insert day results
+        const formattedResults = dayResults.map((dr) => ({
+          version_id: vId,
+          brand_process_id: dr.brand_process_id,
+          work_date: dr.work_date,
+          is_open: dr.is_open,
+          required_staff: dr.required_staff,
+          count: dr.count,
+        }));
 
-      if (formattedEntries.length > 0) {
-        await supabase.from('roster_entries').insert(formattedEntries);
-      }
-      if (formattedResults.length > 0) {
-        await supabase.from('roster_day_results').insert(formattedResults);
-      }
-      if (formattedConflicts.length > 0) {
-        await supabase.from('roster_conflicts').insert(formattedConflicts);
+        // Batch insert conflicts
+        const formattedConflicts = conflicts.map((c) => ({
+          version_id: vId,
+          employee_id: c.employee_id || null,
+          brand_process_id: c.brand_process_id || null,
+          work_date: c.work_date,
+          code: c.code,
+          severity: c.severity,
+          explanation: c.explanation,
+          recommendation: c.recommendation,
+        }));
+
+        if (formattedEntries.length > 0) {
+          await supabase.from('roster_entries').insert(formattedEntries);
+        }
+        if (formattedResults.length > 0) {
+          await supabase.from('roster_day_results').insert(formattedResults);
+        }
+        if (formattedConflicts.length > 0) {
+          await supabase.from('roster_conflicts').insert(formattedConflicts);
+        }
       }
     }
   } catch (e) {

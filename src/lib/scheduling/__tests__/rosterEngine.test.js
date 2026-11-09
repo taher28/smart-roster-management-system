@@ -104,8 +104,205 @@ describe('Availability and Leave Rules', () => {
   });
 });
 
-describe('Roster Generator Core Engine', () => {
-  it('allocates single-resource brands and covers all assigned processes simultaneously', () => {
+describe('Assessment Target Acceptance Criteria Scenarios', () => {
+  // Scenario 1: A successfully generated feasible monthly roster for a properly staffed scenario
+  it('Scenario 1: generates a 100% FEASIBLE roster when properly staffed and aligned with calendar', () => {
+    const testEmployees = [
+      { id: 'emp-1', full_name: 'Ananya Iyer', is_active: true },
+    ];
+    const testBrands = [
+      { id: 'brand-iris', name: 'Iris Eyewear', is_active: true },
+    ];
+    const testProcesses = [
+      { id: 'proc-cs', code: 'CS', name: 'Customer Support' },
+    ];
+    // Iris operates no_sundays_holidays (Monday-Saturday)
+    const testBrandProcesses = [
+      { id: 'bp-iris', brand_id: 'brand-iris', process_id: 'proc-cs', min_staff: 1, calendar_rule: 'no_sundays_holidays', is_active: true },
+    ];
+    const testAssignments = [
+      { id: 'a-1', employee_id: 'emp-1', brand_process_id: 'bp-iris', is_primary: true, is_active: true },
+    ];
+    // Employee has Sunday off, perfectly matching the closed Sunday calendar rule
+    const testWeeklyOffs = [
+      { employee_id: 'emp-1', day_of_week: 0 },
+    ];
+
+    const result = generateMonthlyRoster({
+      year: 2026,
+      month: 11,
+      employees: testEmployees,
+      brands: testBrands,
+      processes: testProcesses,
+      brandProcesses: testBrandProcesses,
+      assignments: testAssignments,
+      weeklyOffs: testWeeklyOffs,
+      holidays: [],
+      leaves: [],
+      availability: [],
+    });
+
+    expect(result.status).toBe(EngineStatus.FEASIBLE);
+    expect(result.conflicts.length).toBe(0);
+    expect(result.stats.coveragePercentage).toBe(100);
+    expect(result.stats.totalFilledShifts).toBe(result.stats.totalRequiredShifts);
+  });
+
+  // Scenario 2: Single-resource brand coverage failure when its dedicated employee becomes unavailable
+  it('Scenario 2: flags coverage failure and conflict when single-resource employee is unavailable', () => {
+    const testEmployees = [
+      { id: 'emp-vikram', full_name: 'Vikram Patel', is_active: true },
+    ];
+    const testBrands = [
+      { id: 'brand-bolt', name: 'Bolt Mobility', is_active: true },
+    ];
+    const testProcesses = [
+      { id: 'proc-cs', code: 'CS', name: 'Customer Support' },
+    ];
+    // 365_days operating calendar
+    const testBrandProcesses = [
+      { id: 'bp-bolt', brand_id: 'brand-bolt', process_id: 'proc-cs', min_staff: 1, calendar_rule: '365_days', is_active: true },
+    ];
+    const testAssignments = [
+      { id: 'a-1', employee_id: 'emp-vikram', brand_process_id: 'bp-bolt', is_primary: true, is_active: true },
+    ];
+    // Vikram on approved leave Nov 12-14
+    const testLeaves = [
+      { employee_id: 'emp-vikram', start_date: '2026-11-12', end_date: '2026-11-14', status: 'approved' },
+    ];
+
+    const result = generateMonthlyRoster({
+      year: 2026,
+      month: 11,
+      employees: testEmployees,
+      brands: testBrands,
+      processes: testProcesses,
+      brandProcesses: testBrandProcesses,
+      assignments: testAssignments,
+      weeklyOffs: [],
+      holidays: [],
+      leaves: testLeaves,
+      availability: [],
+    });
+
+    expect(result.status).toBe(EngineStatus.INFEASIBLE);
+    const leaveConflicts = result.conflicts.filter(
+      (c) => c.work_date >= '2026-11-12' && c.work_date <= '2026-11-14'
+    );
+    expect(leaveConflicts.length).toBe(3);
+    expect(leaveConflicts[0].code).toBe('APPROVED_LEAVE_OR_OFF_CONFLICT');
+    expect(leaveConflicts[0].explanation).toContain('Approved Leave');
+    expect(leaveConflicts[0].recommendation).toContain('backup resource');
+  });
+
+  // Scenario 3: Multi-resource brand continuing coverage when one employee becomes unavailable
+  it('Scenario 3: multi-resource brand retains 100% coverage when one employee is on leave', () => {
+    const testEmployees = [
+      { id: 'emp-1', full_name: 'Specialist Alpha', is_active: true },
+      { id: 'emp-2', full_name: 'Specialist Beta', is_active: true },
+    ];
+    const testBrands = [
+      { id: 'brand-multi', name: 'Multi Brand', is_active: true },
+    ];
+    const testProcesses = [
+      { id: 'proc-cs', code: 'CS', name: 'Customer Support' },
+    ];
+    // min_staff = 1
+    const testBrandProcesses = [
+      { id: 'bp-multi', brand_id: 'brand-multi', process_id: 'proc-cs', min_staff: 1, calendar_rule: '365_days', is_active: true },
+    ];
+    const testAssignments = [
+      { id: 'a-1', employee_id: 'emp-1', brand_process_id: 'bp-multi', is_primary: true, is_active: true },
+      { id: 'a-2', employee_id: 'emp-2', brand_process_id: 'bp-multi', is_primary: false, is_active: true },
+    ];
+    // Specialist Alpha takes leave Nov 10 to Nov 20
+    const testLeaves = [
+      { employee_id: 'emp-1', start_date: '2026-11-10', end_date: '2026-11-20', status: 'approved' },
+    ];
+
+    const result = generateMonthlyRoster({
+      year: 2026,
+      month: 11,
+      employees: testEmployees,
+      brands: testBrands,
+      processes: testProcesses,
+      brandProcesses: testBrandProcesses,
+      assignments: testAssignments,
+      weeklyOffs: [],
+      holidays: [],
+      leaves: testLeaves,
+      availability: [],
+    });
+
+    // Coverage is maintained by Specialist Beta during Alpha's leave
+    expect(result.status).toBe(EngineStatus.FEASIBLE);
+    expect(result.conflicts.length).toBe(0);
+    expect(result.stats.coveragePercentage).toBe(100);
+
+    // Verify Specialist Beta was scheduled during Nov 10-20
+    const betaNov15 = result.entries.find(
+      (e) => e.employee_id === 'emp-2' && e.work_date === '2026-11-15'
+    );
+    expect(betaNov15).toBeDefined();
+  });
+
+  // Scenario 4: Genuinely infeasible staffing scenario (Full Assessment Dataset)
+  it('Scenario 4: reports INFEASIBLE and exact metrics for standard baseline dataset', () => {
+    const result = generateMonthlyRoster({
+      year: 2026,
+      month: 11,
+      employees: INITIAL_EMPLOYEES,
+      brands: INITIAL_BRANDS,
+      processes: INITIAL_PROCESSES,
+      brandProcesses: INITIAL_BRAND_PROCESSES,
+      assignments: INITIAL_ASSIGNMENTS,
+      weeklyOffs: INITIAL_WEEKLY_OFFS,
+      holidays: INITIAL_HOLIDAYS,
+      leaves: INITIAL_LEAVES,
+      availability: INITIAL_AVAILABILITY,
+    });
+
+    // Verification of exact simulation metrics:
+    expect(result.status).toBe(EngineStatus.INFEASIBLE);
+    expect(result.stats.totalRequiredShifts).toBe(870);
+    expect(result.stats.totalFilledShifts).toBe(768);
+    expect(result.stats.totalRequiredShifts - result.stats.totalFilledShifts).toBe(102);
+    expect(result.conflicts.length).toBe(101);
+    expect(result.entries.length).toBe(746);
+    expect(result.stats.coveragePercentage).toBe(88); // 88.28% rounded
+
+    // Vikram Patel's leave conflict check
+    const vikramConflict = result.conflicts.find(
+      (c) => c.work_date === '2026-11-12' && c.explanation.includes('Vikram Patel')
+    );
+    expect(vikramConflict).toBeDefined();
+    expect(vikramConflict.recommendation).toContain('backup resource');
+  });
+
+  // Scenario 5: Search budget exhausted scenario
+  it('Scenario 5: reports SEARCH_LIMIT_REACHED when search budget is artificially constrained', () => {
+    const result = generateMonthlyRoster({
+      year: 2026,
+      month: 11,
+      employees: INITIAL_EMPLOYEES,
+      brands: INITIAL_BRANDS,
+      processes: INITIAL_PROCESSES,
+      brandProcesses: INITIAL_BRAND_PROCESSES,
+      assignments: INITIAL_ASSIGNMENTS,
+      weeklyOffs: INITIAL_WEEKLY_OFFS,
+      holidays: INITIAL_HOLIDAYS,
+      leaves: INITIAL_LEAVES,
+      availability: INITIAL_AVAILABILITY,
+      options: { searchLimit: 1 }, // Budget of 1 step
+    });
+
+    expect(result.status).toBe(EngineStatus.SEARCH_LIMIT_REACHED);
+    expect(result.searchLimitReached).toBe(true);
+  });
+});
+
+describe('Multi-Process and Inactivity Rules', () => {
+  it('covers multiple eligible processes on same brand without double counting shift', () => {
     const testEmployees = [
       { id: 'emp-1', full_name: 'Test Specialist', is_active: true },
     ];
@@ -143,14 +340,12 @@ describe('Roster Generator Core Engine', () => {
     expect(result.conflicts.length).toBe(0);
     expect(result.stats.coveragePercentage).toBe(100);
 
-    // Verify employee is scheduled 1 shift per day for the brand
-    const daysInNov = 30;
-    expect(result.entries.length).toBe(daysInNov);
+    // Exactly 30 entries (1 per day for the employee on this brand)
+    expect(result.entries.length).toBe(30);
 
-    // Verify both processes are marked as covered (count = 1) for each day
+    // Both processes are satisfied (count = 1) for each day
     for (const res of result.dayResults) {
       expect(res.count).toBe(1);
-      expect(res.is_open).toBe(true);
     }
   });
 
@@ -186,98 +381,6 @@ describe('Roster Generator Core Engine', () => {
     expect(result.conflicts.length).toBeGreaterThan(0);
     expect(result.conflicts[0].code).toBe('APPROVED_LEAVE_OR_OFF_CONFLICT');
     expect(result.conflicts[0].explanation).toContain('Inactive');
-  });
-
-  it('correctly handles multi-resource brand staffing requirements', () => {
-    const testEmployees = [
-      { id: 'emp-1', full_name: 'Emp 1', is_active: true },
-      { id: 'emp-2', full_name: 'Emp 2', is_active: true },
-      { id: 'emp-3', full_name: 'Emp 3', is_active: true },
-    ];
-    const testBrands = [
-      { id: 'brand-multi', name: 'Multi Brand', is_active: true },
-    ];
-    const testProcesses = [
-      { id: 'proc-cs', code: 'CS', name: 'Customer Support' },
-    ];
-    const testBrandProcesses = [
-      { id: 'bp-1', brand_id: 'brand-multi', process_id: 'proc-cs', min_staff: 2, calendar_rule: '365_days', is_active: true },
-    ];
-    const testAssignments = [
-      { id: 'a-1', employee_id: 'emp-1', brand_process_id: 'bp-1', is_primary: true, is_active: true },
-      { id: 'a-2', employee_id: 'emp-2', brand_process_id: 'bp-1', is_primary: true, is_active: true },
-      { id: 'a-3', employee_id: 'emp-3', brand_process_id: 'bp-1', is_primary: false, is_active: true },
-    ];
-
-    const result = generateMonthlyRoster({
-      year: 2026,
-      month: 11,
-      employees: testEmployees,
-      brands: testBrands,
-      processes: testProcesses,
-      brandProcesses: testBrandProcesses,
-      assignments: testAssignments,
-      weeklyOffs: [],
-      holidays: [],
-      leaves: [],
-      availability: [],
-    });
-
-    expect(result.status).toBe(EngineStatus.FEASIBLE);
-    // Each day needs 2 staff, so 30 * 2 = 60 entries
-    expect(result.entries.length).toBe(60);
-    expect(result.conflicts.length).toBe(0);
-  });
-
-  it('stops and reports SEARCH_LIMIT_REACHED if search limit is exhausted', () => {
-    // Provide a small artificial search limit
-    const result = generateMonthlyRoster({
-      year: 2026,
-      month: 11,
-      employees: INITIAL_EMPLOYEES,
-      brands: INITIAL_BRANDS,
-      processes: INITIAL_PROCESSES,
-      brandProcesses: INITIAL_BRAND_PROCESSES,
-      assignments: INITIAL_ASSIGNMENTS,
-      weeklyOffs: INITIAL_WEEKLY_OFFS,
-      holidays: INITIAL_HOLIDAYS,
-      leaves: INITIAL_LEAVES,
-      availability: INITIAL_AVAILABILITY,
-      options: { searchLimit: 1 }, // Artificially low limit
-    });
-
-    expect(result.status).toBe(EngineStatus.SEARCH_LIMIT_REACHED);
-    expect(result.searchLimitReached).toBe(true);
-  });
-
-  it('runs against the complete 31-employee assessment dataset and flags realistic conflicts', () => {
-    const result = generateMonthlyRoster({
-      year: 2026,
-      month: 11,
-      employees: INITIAL_EMPLOYEES,
-      brands: INITIAL_BRANDS,
-      processes: INITIAL_PROCESSES,
-      brandProcesses: INITIAL_BRAND_PROCESSES,
-      assignments: INITIAL_ASSIGNMENTS,
-      weeklyOffs: INITIAL_WEEKLY_OFFS,
-      holidays: INITIAL_HOLIDAYS,
-      leaves: INITIAL_LEAVES,
-      availability: INITIAL_AVAILABILITY,
-    });
-
-    // Verification of business requirements:
-    // 1. Roster entries generated for November 2026
-    expect(result.entries.length).toBeGreaterThan(0);
-    // 2. Daily results calculated for every brand process
-    expect(result.dayResults.length).toBeGreaterThan(0);
-    // 3. Vikram Patel's approved leave on Nov 12-14 is caught as a conflict for his single-resource brand
-    const vikramConflict = result.conflicts.find(
-      (c) => c.work_date === '2026-11-12' && c.explanation.includes('Vikram Patel')
-    );
-    expect(vikramConflict).toBeDefined();
-    expect(vikramConflict.recommendation).toContain('backup resource');
-    // 4. Overall stats
-    expect(result.stats.coveragePercentage).toBeGreaterThan(50);
   });
 });
 

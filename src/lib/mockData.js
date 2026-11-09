@@ -14,7 +14,7 @@ export const INITIAL_PROCESSES = [
   { id: '10000000-0000-0000-0000-000000000001', code: 'CS', name: 'Customer Support', description: 'Real-time multi-channel client inquiries, chat, and email tickets.' },
   { id: '10000000-0000-0000-0000-000000000002', code: 'ACC', name: 'Abandoned Cart Conversions', description: 'Outreach and checkout recovery via WhatsApp, SMS, and email.' },
   { id: '10000000-0000-0000-0000-000000000003', code: 'NDR', name: 'Non-Delivery Report Management', description: 'Courier re-attempts, address validation, and RTO reduction.' },
-  { id: '10000000-0000-0000-0000-000000000004', code: 'Retention', name: 'Retention Operations', description: 'VIP client follow-ups, win-back flows, and feedback loops.' }
+  { id: '10000000-0000-0000-0000-000000000004', code: 'RET', name: 'Retention Operations', description: 'VIP client follow-ups, win-back flows, and feedback loops.' }
 ];
 
 export const INITIAL_EMPLOYEES = [

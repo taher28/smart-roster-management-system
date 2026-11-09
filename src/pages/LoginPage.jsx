@@ -63,7 +63,7 @@ export default function LoginPage() {
           <div className="flex items-center gap-2">
             <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
             <p className="text-xs font-bold tracking-widest text-slate-300 uppercase">
-              Datastraw Technologies
+              Internship Assessment Project
             </p>
           </div>
           <h1 className="mt-6 max-w-lg text-4xl font-extrabold tracking-tight text-white leading-tight">
@@ -107,7 +107,7 @@ export default function LoginPage() {
         <div className="w-full max-w-sm">
           <div className="mb-6">
             <p className="text-xs font-semibold tracking-wider text-muted uppercase lg:hidden">
-              Datastraw Technologies
+              Smart Roster Management System
             </p>
             <h2 className="mt-2 text-2xl font-bold tracking-tight text-ink">
               Manager Sign In

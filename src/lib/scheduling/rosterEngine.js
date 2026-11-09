@@ -108,6 +108,52 @@ export function isEmployeeExplicitlyUnavailable(employeeId, dateStr, availabilit
 }
 
 /**
+ * Parse a HH:MM or HH:MM:SS clock time into minutes from midnight.
+ * Shift windows are stored on brand-process records. They are informational:
+ * the hard rule remains one brand per employee per date, not independent
+ * shift-time packing.
+ */
+export function parseShiftMinutes(timeValue) {
+  if (timeValue == null || timeValue === '') return null;
+  const match = String(timeValue).trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function shiftInterval(start, end) {
+  if (start == null || end == null) return null;
+  const endMinute = end <= start ? end + 24 * 60 : end;
+  return [start, endMinute];
+}
+
+function intervalsOverlap(a, b) {
+  return a[0] < b[1] && b[0] < a[1];
+}
+
+/**
+ * Half-open overlap test for two shifts. A shift that ends exactly when
+ * another starts does not overlap. If end <= start, the shift crosses midnight.
+ * This helper explains time overlap. It does not replace the one-brand-per-day rule.
+ */
+export function shiftsOverlap(startA, endA, startB, endB) {
+  const a = shiftInterval(parseShiftMinutes(startA), parseShiftMinutes(endA));
+  const b = shiftInterval(parseShiftMinutes(startB), parseShiftMinutes(endB));
+  if (!a || !b) return false;
+  const day = 24 * 60;
+  const aShifts = [a, [a[0] + day, a[1] + day]];
+  const bShifts = [b, [b[0] + day, b[1] + day]];
+  return aShifts.some((left) => bShifts.some((right) => intervalsOverlap(left, right)));
+}
+
+export function describeShiftOverlap(startA, endA, startB, endB) {
+  if (!shiftsOverlap(startA, endA, startB, endB)) return null;
+  return `Shift ${startA}–${endA} overlaps shift ${startB}–${endB}.`;
+}
+
+/**
  * Core Monthly Roster Generator
  */
 export function generateMonthlyRoster({
@@ -166,7 +212,6 @@ export function generateMonthlyRoster({
   }
 
   // Tracking structures
-  // rosterEntries: Set of `${versionId}_${brandId}_${employeeId}_${date}`
   const scheduledEntries = [];
   // Key: `${date}_${employeeId}` -> assigned brandId (prevents cross-brand double booking)
   const employeeDateBrand = new Map();
@@ -224,41 +269,36 @@ export function generateMonthlyRoster({
   }
 
   // ----------------------------------------------------------------------------
-  // PHASE 2: Allocate Single-Resource Brands
-  // When an employee is assigned to a single-resource brand:
-  // - If available: assigned to the brand and simultaneously covers all open processes on that brand.
-  // - If unavailable: not assigned; conflict will be flagged in Phase 4.
+  // PHASE 2 & 3: Date-by-Date Scheduling with Bounded Backtracking & MRV
   // ----------------------------------------------------------------------------
   for (const dateStr of dates) {
+    // Phase 2: Allocate Single-Resource Brands for this date
     for (const srb of singleResourceBrands) {
       const { brand, bps, soleEmployeeId } = srb;
 
-      // Check which processes of this brand are open today
       const openBPs = bps.filter((bp) => {
         const isHoliday = isDatePublicHoliday(dateStr, brand.id, holidays);
         return isBrandProcessOpenOnDate(bp.calendar_rule, dateStr, isHoliday);
       });
 
-      if (openBPs.length === 0) {
-        continue; // Brand is entirely closed today
-      }
+      if (openBPs.length === 0) continue;
 
-      // Check if sole employee is available today and not already double-booked
       const canWork = canEmployeeWorkDate(soleEmployeeId, dateStr);
       const existingBrand = employeeDateBrand.get(`${dateStr}_${soleEmployeeId}`);
 
       if (canWork && (!existingBrand || existingBrand === brand.id)) {
-        // Assign employee to this brand on this date
-        employeeDateBrand.set(`${dateStr}_${soleEmployeeId}`, brand.id);
-        scheduledEntries.push({
-          brand_id: brand.id,
-          employee_id: soleEmployeeId,
-          work_date: dateStr,
-        });
-        employeeShiftCounts.set(
-          soleEmployeeId,
-          (employeeShiftCounts.get(soleEmployeeId) || 0) + 1
-        );
+        if (!existingBrand) {
+          employeeDateBrand.set(`${dateStr}_${soleEmployeeId}`, brand.id);
+          scheduledEntries.push({
+            brand_id: brand.id,
+            employee_id: soleEmployeeId,
+            work_date: dateStr,
+          });
+          employeeShiftCounts.set(
+            soleEmployeeId,
+            (employeeShiftCounts.get(soleEmployeeId) || 0) + 1
+          );
+        }
 
         // Multi-process coverage rule: employee covers all open eligible processes on this brand
         for (const bp of openBPs) {
@@ -271,15 +311,9 @@ export function generateMonthlyRoster({
         }
       }
     }
-  }
 
-  // ----------------------------------------------------------------------------
-  // PHASE 3: Bounded Backtracking Solver for Multi-Resource Brands & Open Slots
-  // ----------------------------------------------------------------------------
-  // Identify all unsatisfied open requirements across multi-resource brands
-  const unsatisfiedSlots = [];
-
-  for (const dateStr of dates) {
+    // Phase 3: Allocate Multi-Resource Brands for this date using Bounded Backtracking + MRV
+    const dateSlots = [];
     for (const mrb of multiResourceBrands) {
       const { brand, bps } = mrb;
       for (const bp of bps) {
@@ -291,7 +325,7 @@ export function generateMonthlyRoster({
         const needed = bp.min_staff - assignedSoFar.size;
 
         for (let i = 0; i < needed; i++) {
-          unsatisfiedSlots.push({
+          dateSlots.push({
             dateStr,
             brandId: brand.id,
             brandProcess: bp,
@@ -299,136 +333,227 @@ export function generateMonthlyRoster({
         }
       }
     }
-  }
 
-  // Heuristic: Order slots using Minimum Remaining Values (MRV)
-  // Slots with fewest eligible available candidates are scheduled first
-  function getEligibleCandidates(slot) {
-    const { dateStr, brandId, brandProcess } = slot;
-    const assigns = assigneesByBrandProcess.get(brandProcess.id) || [];
-    const candidates = [];
+    // MRV heuristic: sort slots by number of eligible available candidates
+    function getCandidatesForSlot(slot) {
+      const { brandId, brandProcess } = slot;
+      const assigns = assigneesByBrandProcess.get(brandProcess.id) || [];
+      const candidates = [];
 
-    for (const a of assigns) {
-      const empId = a.employee_id;
-      // Hard constraints:
-      if (!canEmployeeWorkDate(empId, dateStr)) continue;
+      for (const a of assigns) {
+        const empId = a.employee_id;
+        if (!canEmployeeWorkDate(empId, dateStr)) continue;
 
-      // Single brand cap: must not work for a DIFFERENT brand on this date
-      const bookedBrand = employeeDateBrand.get(`${dateStr}_${empId}`);
-      if (bookedBrand && bookedBrand !== brandId) continue;
+        // Single brand cap: must not work for a DIFFERENT brand on this date
+        const bookedBrand = employeeDateBrand.get(`${dateStr}_${empId}`);
+        if (bookedBrand && bookedBrand !== brandId) continue;
 
-      // Cannot be counted twice for the same process on the same date
-      const alreadyOnBP = bpAssignedOnDate.get(`${dateStr}_${brandProcess.id}`)?.has(empId);
-      if (alreadyOnBP) continue;
+        // Cannot be counted twice for the same process on the same date
+        const alreadyOnBP = bpAssignedOnDate.get(`${dateStr}_${brandProcess.id}`)?.has(empId);
+        if (alreadyOnBP) continue;
 
-      candidates.push({
-        employeeId: empId,
-        isPrimary: a.is_primary,
-        shiftCount: employeeShiftCounts.get(empId) || 0,
-      });
-    }
-
-    // Soft constraints: Primary assignees first, then lowest shift count (fair distribution)
-    candidates.sort((a, b) => {
-      if (a.isPrimary !== b.isPrimary) {
-        return a.isPrimary ? -1 : 1;
-      }
-      return a.shiftCount - b.shiftCount;
-    });
-
-    return candidates.map((c) => c.employeeId);
-  }
-
-  // Sort slots by candidate count (MRV)
-  unsatisfiedSlots.sort((a, b) => {
-    return getEligibleCandidates(a).length - getEligibleCandidates(b).length;
-  });
-
-  // Backtracking solver
-  function solveSlots(slotIndex) {
-    if (slotIndex >= unsatisfiedSlots.length) {
-      return true; // Complete schedule found
-    }
-
-    stepsCounter++;
-    if (stepsCounter >= searchLimit) {
-      searchLimitReached = true;
-      return false; // Bounded cutoff
-    }
-
-    const slot = unsatisfiedSlots[slotIndex];
-    const { dateStr, brandId, brandProcess } = slot;
-    const candidates = getEligibleCandidates(slot);
-
-    if (candidates.length === 0) {
-      // Forward failure for this branch
-      return false;
-    }
-
-    for (const empId of candidates) {
-      const dateEmpKey = `${dateStr}_${empId}`;
-      const bpDateKey = `${dateStr}_${brandProcess.id}`;
-      const prevBrand = employeeDateBrand.get(dateEmpKey);
-      const isNewToBrand = !prevBrand;
-
-      // Apply trial assignment
-      employeeDateBrand.set(dateEmpKey, brandId);
-      if (!bpAssignedOnDate.has(bpDateKey)) bpAssignedOnDate.set(bpDateKey, new Set());
-      bpAssignedOnDate.get(bpDateKey).add(empId);
-      if (isNewToBrand) {
-        scheduledEntries.push({
-          brand_id: brandId,
-          employee_id: empId,
-          work_date: dateStr,
+        candidates.push({
+          employeeId: empId,
+          isPrimary: a.is_primary,
+          shiftCount: employeeShiftCounts.get(empId) || 0,
         });
-        employeeShiftCounts.set(empId, (employeeShiftCounts.get(empId) || 0) + 1);
       }
 
-      // Multi-process coverage within the same brand:
-      // If employee is eligible for other open processes on this brand today, also cover them
-      const bpsOnBrand = brandProcessByBrand.get(brandId) || [];
-      const autoCoveredBPs = [];
-      for (const otherBP of bpsOnBrand) {
-        if (otherBP.id === brandProcess.id) continue;
-        const otherOpen = isBrandProcessOpenOnDate(
-          otherBP.calendar_rule,
-          dateStr,
-          isDatePublicHoliday(dateStr, brandId, holidays)
-        );
-        if (otherOpen && empAssignedBPs.get(empId)?.has(otherBP.id)) {
-          const otherKey = `${dateStr}_${otherBP.id}`;
-          if (!bpAssignedOnDate.has(otherKey)) bpAssignedOnDate.set(otherKey, new Set());
-          if (!bpAssignedOnDate.get(otherKey).has(empId)) {
-            bpAssignedOnDate.get(otherKey).add(empId);
-            autoCoveredBPs.push(otherBP.id);
-          }
+      // Soft constraints: Primary assignees first, then lowest shift count (fair distribution)
+      candidates.sort((a, b) => {
+        if (a.isPrimary !== b.isPrimary) {
+          return a.isPrimary ? -1 : 1;
         }
+        return a.shiftCount - b.shiftCount;
+      });
+
+      return candidates.map((c) => c.employeeId);
+    }
+
+    dateSlots.sort((a, b) => getCandidatesForSlot(a).length - getCandidatesForSlot(b).length);
+
+    let bestScore = -1;
+    let bestSnapshot = null;
+
+    function coverageScoreForDate() {
+      const seen = new Set();
+      let score = 0;
+      for (const slot of dateSlots) {
+        if (seen.has(slot.brandProcess.id)) continue;
+        seen.add(slot.brandProcess.id);
+        const assigned = bpAssignedOnDate.get(`${dateStr}_${slot.brandProcess.id}`)?.size || 0;
+        score += Math.min(assigned, slot.brandProcess.min_staff);
+      }
+      return score;
+    }
+
+    function captureDateSnapshot() {
+      const brandAssign = [];
+      for (const [key, brandId] of employeeDateBrand) {
+        if (key.startsWith(`${dateStr}_`)) brandAssign.push([key, brandId]);
+      }
+      const processAssign = [];
+      for (const [key, empSet] of bpAssignedOnDate) {
+        if (key.startsWith(`${dateStr}_`)) processAssign.push([key, Array.from(empSet)]);
+      }
+      return {
+        brandAssign,
+        processAssign,
+        entries: scheduledEntries
+          .filter((entry) => entry.work_date === dateStr)
+          .map((entry) => ({ ...entry })),
+        counts: new Map(employeeShiftCounts),
+      };
+    }
+
+    function restoreDateSnapshot(snapshot) {
+      if (!snapshot) return;
+      for (const key of Array.from(employeeDateBrand.keys())) {
+        if (key.startsWith(`${dateStr}_`)) employeeDateBrand.delete(key);
+      }
+      for (const [key, brandId] of snapshot.brandAssign) employeeDateBrand.set(key, brandId);
+
+      for (const key of Array.from(bpAssignedOnDate.keys())) {
+        if (key.startsWith(`${dateStr}_`)) bpAssignedOnDate.delete(key);
+      }
+      for (const [key, empIds] of snapshot.processAssign) {
+        bpAssignedOnDate.set(key, new Set(empIds));
       }
 
-      const success = solveSlots(slotIndex + 1);
-      if (success) return true;
-      if (searchLimitReached) return false;
+      for (let index = scheduledEntries.length - 1; index >= 0; index -= 1) {
+        if (scheduledEntries[index].work_date === dateStr) scheduledEntries.splice(index, 1);
+      }
+      scheduledEntries.push(...snapshot.entries.map((entry) => ({ ...entry })));
 
-      // Backtrack
+      employeeShiftCounts.clear();
+      for (const [empId, count] of snapshot.counts) employeeShiftCounts.set(empId, count);
+    }
+
+    function recordBest() {
+      const score = coverageScoreForDate();
+      if (score > bestScore) {
+        bestScore = score;
+        bestSnapshot = captureDateSnapshot();
+      }
+    }
+
+    function slotStillRequired(slot) {
+      const assigned = bpAssignedOnDate.get(`${dateStr}_${slot.brandProcess.id}`)?.size || 0;
+      return assigned < slot.brandProcess.min_staff;
+    }
+
+    function undoAssignment(empId, slot, isNewToBrand, autoCoveredBPs) {
+      const bpDateKey = `${dateStr}_${slot.brandProcess.id}`;
       for (const autoBPId of autoCoveredBPs) {
         bpAssignedOnDate.get(`${dateStr}_${autoBPId}`)?.delete(empId);
       }
       bpAssignedOnDate.get(bpDateKey)?.delete(empId);
       if (isNewToBrand) {
         const idx = scheduledEntries.findIndex(
-          (e) => e.brand_id === brandId && e.employee_id === empId && e.work_date === dateStr
+          (entry) =>
+            entry.brand_id === slot.brandId &&
+            entry.employee_id === empId &&
+            entry.work_date === dateStr
         );
         if (idx !== -1) scheduledEntries.splice(idx, 1);
-        employeeDateBrand.delete(dateEmpKey);
-        employeeShiftCounts.set(empId, Math.max(0, (employeeShiftCounts.get(empId) || 0) - 1));
+        employeeDateBrand.delete(`${dateStr}_${empId}`);
+        employeeShiftCounts.set(empId, Math.max(0, (employeeShiftCounts.get(empId) || 1) - 1));
       }
     }
 
-    return false;
-  }
+    /**
+     * Genuine backtracking. A required slot that cannot be filled fails this
+     * branch so earlier choices are reconsidered. Skipping a required slot is
+     * not a complete solution. Slots already filled by same-brand multi-process
+     * coverage are skipped because their requirement is already met.
+     */
+    function solveDateSlots(slotIndex) {
+      if (searchLimitReached) return false;
+      if (slotIndex >= dateSlots.length) {
+        recordBest();
+        return true;
+      }
 
-  if (unsatisfiedSlots.length > 0) {
-    solveSlots(0);
+      const slot = dateSlots[slotIndex];
+      if (!slotStillRequired(slot)) {
+        return solveDateSlots(slotIndex + 1);
+      }
+
+      stepsCounter += 1;
+      if (stepsCounter >= searchLimit) {
+        searchLimitReached = true;
+        recordBest();
+        return false;
+      }
+
+      const candidates = getCandidatesForSlot(slot);
+      if (candidates.length === 0) {
+        recordBest();
+        return false;
+      }
+
+      for (const empId of candidates) {
+        const dateEmpKey = `${dateStr}_${empId}`;
+        const bpDateKey = `${dateStr}_${slot.brandProcess.id}`;
+        const prevBrand = employeeDateBrand.get(dateEmpKey);
+        if (prevBrand && prevBrand !== slot.brandId) continue;
+        const isNewToBrand = !prevBrand;
+
+        employeeDateBrand.set(dateEmpKey, slot.brandId);
+        if (!bpAssignedOnDate.has(bpDateKey)) bpAssignedOnDate.set(bpDateKey, new Set());
+        bpAssignedOnDate.get(bpDateKey).add(empId);
+        if (isNewToBrand) {
+          const alreadyListed = scheduledEntries.some(
+            (entry) =>
+              entry.brand_id === slot.brandId &&
+              entry.employee_id === empId &&
+              entry.work_date === dateStr
+          );
+          if (!alreadyListed) {
+            scheduledEntries.push({
+              brand_id: slot.brandId,
+              employee_id: empId,
+              work_date: dateStr,
+            });
+          }
+          employeeShiftCounts.set(empId, (employeeShiftCounts.get(empId) || 0) + 1);
+        }
+
+        const bpsOnBrand = brandProcessByBrand.get(slot.brandId) || [];
+        const autoCoveredBPs = [];
+        for (const otherBP of bpsOnBrand) {
+          if (otherBP.id === slot.brandProcess.id) continue;
+          const otherOpen = isBrandProcessOpenOnDate(
+            otherBP.calendar_rule,
+            dateStr,
+            isDatePublicHoliday(dateStr, slot.brandId, holidays)
+          );
+          if (otherOpen && empAssignedBPs.get(empId)?.has(otherBP.id)) {
+            const otherKey = `${dateStr}_${otherBP.id}`;
+            if (!bpAssignedOnDate.has(otherKey)) bpAssignedOnDate.set(otherKey, new Set());
+            if (!bpAssignedOnDate.get(otherKey).has(empId)) {
+              bpAssignedOnDate.get(otherKey).add(empId);
+              autoCoveredBPs.push(otherBP.id);
+            }
+          }
+        }
+
+        recordBest();
+        const success = solveDateSlots(slotIndex + 1);
+        if (success) return true;
+        undoAssignment(empId, slot, isNewToBrand, autoCoveredBPs);
+        if (searchLimitReached) return false;
+      }
+
+      recordBest();
+      return false;
+    }
+
+    if (dateSlots.length > 0) {
+      recordBest();
+      const solved = solveDateSlots(0);
+      if (!solved) restoreDateSnapshot(bestSnapshot);
+    }
   }
 
   // Deduplicate scheduledEntries by (brand_id, employee_id, work_date)
@@ -448,7 +573,6 @@ export function generateMonthlyRoster({
   const conflicts = [];
   let totalRequiredShifts = 0;
   let totalFilledShifts = 0;
-  let hasInfeasibleSlot = false;
 
   for (const dateStr of dates) {
     for (const bp of brandProcesses) {
@@ -483,7 +607,6 @@ export function generateMonthlyRoster({
         const deficit = requiredStaff - assignedCount;
 
         if (assigns.length === 0) {
-          hasInfeasibleSlot = true;
           conflicts.push({
             work_date: dateStr,
             brand_id: bp.brand_id,
@@ -564,12 +687,17 @@ export function generateMonthlyRoster({
     }
   }
 
-  // Determine overall status
+  // SEARCH_LIMIT_REACHED means feasibility is unknown. Coverage gaps found
+  // after a completed search are INFEASIBLE. A finished search with every
+  // required slot filled is FEASIBLE.
   let overallStatus = EngineStatus.FEASIBLE;
+  let feasibility = 'feasible';
   if (searchLimitReached) {
     overallStatus = EngineStatus.SEARCH_LIMIT_REACHED;
+    feasibility = 'unknown';
   } else if (conflicts.length > 0) {
     overallStatus = EngineStatus.INFEASIBLE;
+    feasibility = 'infeasible';
   }
 
   const coveragePercentage =
@@ -579,6 +707,7 @@ export function generateMonthlyRoster({
 
   return {
     status: overallStatus,
+    feasibility,
     searchLimitReached,
     stepsExecuted: stepsCounter,
     entries: finalRosterEntries,
