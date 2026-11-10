@@ -1,340 +1,488 @@
-# Smart Roster Management System
-### Algorithmic Workforce Planning & Deterministic Constraint Scheduling
+# DataStraw – Smart Roster Management System
 
-Developed for the **Datastraw Technologies AI + Tech Internship Assessment**  
-**Repository**: `C:\Users\TAHER\datastraw-roster-management`  
-**Stack**: React 19, Vite, Tailwind CSS 4, React Router, Supabase PostgreSQL, Vitest  
+### Workforce Planning with Deterministic, Constraint-Based Scheduling
+
+Developed for the **DataStraw Technologies AI + Tech Internship Assessment**.
+
+**Live Application:** https://smart-roster-management-system-iota.vercel.app/
+
+**GitHub Repository:** https://github.com/taher28/smart-roster-management-system
+
+**Demo Video:** [Add your Google Drive video link here]
+
+**LinkedIn Profile:** www.linkedin.com/in/taher-saterdawala
 
 ---
 
 ## 1. Project Overview
 
-The **Smart Roster Management System** is a full-stack workforce planning platform designed to solve multi-client operational scheduling for high-velocity D2C brand operations.
+DataStraw is a workforce roster management application designed for companies managing multiple client brands and operational processes.
 
-The system manages **31 unique employees**, **22 client brands**, **4 operational pods**, and **4 specialized processes** (Customer Support, Abandoned Cart Conversion, Non-Delivery Reports, and Retention), scheduling shifts across diverse client operating calendars while strictly respecting labor constraints (weekly rest days, approved leaves, and comp-offs).
+It helps managers organise employees, pods, processes, assignments, working calendars, weekly offs and leaves. The system generates monthly employee rosters while checking staffing requirements and identifying scheduling conflicts.
 
-### Key Architectural Highlights
-- **100% Deterministic Engine**: Built with a bounded backtracking constraint satisfaction solver and Minimum Remaining Values (MRV) heuristic. No paid AI API dependencies or non-deterministic hallucinations.
-- **Explainable Conflict Detection**: Identifies coverage deficits, leave clashes, weekly off conflicts, and double-booking with concrete root-cause explanations and actionable recommendations.
-- **Five Stakeholder Views**: Interactive monthly roster views by Company, Pod, Brand, Process, and Individual Employee.
-- **Manual Adjustments & Version Snapshots**: Cell-level manual assignment overrides with real-time constraint revalidation and atomic PostgreSQL version history snapshots.
-- **Enterprise PostgreSQL & RLS**: 15 relational tables secured with Row Level Security, role-based manager access, and atomic transactional RPCs.
-- **Resilient Offline Architecture**: Real-time integration with remote Supabase with an automatic, reactive local-first fallback that guarantees seamless demonstration without crashing if unauthenticated.
+The bundled assessment dataset contains:
+
+- **31 employees**
+- **22 client brands**
+- **4 operational pods**
+- **4 operational processes:**
+  - Customer Support (CS)
+  - Abandoned Cart Conversion (ACC)
+  - Non-Delivery Reports (NDR)
+  - Retention (RET)
+
+The main objective is to simplify workforce planning and help managers identify staffing gaps before finalising a roster.
+
+### Main Features
+
+- Dashboard with workforce and roster summaries.
+- Employee, brand, process and pod management.
+- Employee-to-brand-process assignments.
+- Weekly-off, holiday, leave and availability management.
+- Monthly roster generation for November 2026.
+- Company-wide, pod-wise, brand-wise, process-wise and employee-wise roster views.
+- Conflict detection with explanations and recommendations.
+- Manual roster editing followed by revalidation.
+- Local roster version history and restore functionality.
+- CSV export of roster information.
 
 ---
 
-## 2. System Architecture & Relational Data Model
+## 2. Technology Stack
 
+| Category | Technologies |
+|---|---|
+| Frontend | React 19, Vite |
+| Styling | Tailwind CSS 4 |
+| Routing | React Router |
+| Programming Language | JavaScript |
+| Scheduling Algorithm | Deterministic Bounded Backtracking, MRV |
+| Demo Data | JavaScript Seed Data |
+| Demo Persistence | Browser LocalStorage |
+| Testing | Vitest |
+| Deployment | Vercel |
+| Database Integration | Supabase client support in the codebase; not configured for this local demo |
+
+### System Architecture
+
+```text
+             React + Vite Interface
+                       |
+                       v
+              Pages and Components
+                       |
+                       v
+               Data Service Layer
+              (dataService.js)
+                       |
+             +---------+---------+
+             |                   |
+             v                   v
+       Bundled Seed Data     LocalStorage
+        (mockData.js)        (Demo Changes)
+             |
+             v
+       Scheduling Engine
+       (rosterEngine.js)
+             |
+       +-----+------+----------+
+       |            |          |
+       v            v          v
+   Allocation   Constraints  Conflicts
+       |            |          |
+       +------------+----------+
+                    |
+                    v
+          Roster Views and Reports
+                    |
+          +---------+---------+
+          |                   |
+          v                   v
+     Version History       CSV Export
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                       React 19 Frontend                     │
-│   (Vite, Tailwind CSS 4, React Router, Lucide Icons)        │
-│   - Modules: Dashboard, Employees, Brands, Processes, Pods, │
-│     Assignments, Working Rules, Leaves, Roster, Conflicts   │
-│   - 5 Roster Views + History Drawer + RFC-4180 CSV Export   │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-┌──────────────────────────────▼──────────────────────────────┐
-│                      Data Access Layer                      │
-│                  (`src/lib/dataService.js`)                 │
-│   - Supabase PostgREST Client & Auth Session Listener       │
-│   - Atomic Transactional RPCs (`save_roster_snapshot`)      │
-│   - Reactive LocalStorage Fallback (Zero-Crash Guarantee)   │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-┌──────────────────────────────▼──────────────────────────────┐
-│                 Deterministic Scheduling Engine             │
-│               (`src/lib/scheduling/rosterEngine.js`)         │
-│   - Minimum Remaining Values (MRV) Heuristic                │
-│   - Date-by-Date Bounded Backtracking Solver                │
-│   - Multi-Process Rule & Single-Brand Daily Cap             │
-│   - Statuses: FEASIBLE, INFEASIBLE, SEARCH_LIMIT_REACHED    │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-┌──────────────────────────────▼──────────────────────────────┐
-│                    PostgreSQL & Supabase                    │
-│   - 15 Relational Tables with Foreign Keys & Unique Bounds  │
-│   - Strict Row Level Security (Viewer Default, Manager R/W) │
-│   - Atomic Transactional Functions for Version Rollbacks    │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Relational Entity Schema (15 Tables)
-1. **`profiles`**: User authentication profile with RBAC role (`manager`, `lead`, `viewer`).
-2. **`pods`**: 4 operational units (`Pod Alpha`, `Pod Beta`, `Pod Gamma`, `Pod Delta`) with designated lead specialists.
-3. **`employees`**: 31 operational specialists with pod memberships and active/inactive status.
-4. **`brands`**: 22 client brands (18 single-resource, 4 multi-resource).
-5. **`processes`**: 4 operational processes (`CS`, `ACC`, `NDR`, `Retention`).
-6. **`brand_processes`**: Process contracts per brand specifying `shift_start`, `shift_end`, `min_staff`, and operating calendar (`365_days`, `no_holidays`, `no_sundays_holidays`).
-7. **`assignments`**: Qualification junction linking employees to brand processes, flagging `is_primary`.
-8. **`weekly_offs`**: Designated weekly rest days (0 = Sunday through 6 = Saturday) per employee.
-9. **`holidays`**: Public holidays (company-wide or brand-specific).
-10. **`leaves`**: Planned leaves and comp-offs with status (`approved`, `pending`, `rejected`).
-11. **`employee_availability`**: Explicit unavailability blocks.
-12. **`roster_versions`**: Immutable historical version records with status (`draft`, `published`, `archived`).
-13. **`roster_entries`**: Daily shift assignments `(version_id, brand_id, employee_id, work_date)`.
-14. **`roster_day_results`**: Daily coverage fulfillment per brand process `(required_staff, count, is_open)`.
-15. **`roster_conflicts`**: Specific diagnostic records with failure code, severity, explanation, and resolution.
 
 ---
 
-## 3. Mandatory Assessment Questions & Detailed Answers
+## 3. Database and Data Management
 
-### Q1: How did you model employees, brands, processes, pods, and their relationships?
-**Answer**:  
-We modeled the domain using a normalized relational architecture centered around operational eligibility:
-- **Employees & Pods**: Employees belong to a pod (`employees.pod_id -> pods.id`). Pods appoint one employee as the Pod Lead (`pods.lead_employee_id -> employees.id`), resolved via a circular foreign key constraint.
-- **Brands & Processes Junction (`brand_processes`)**: Brands do not have a uniform monolithic schedule. Instead, each process under a brand is modeled independently in `brand_processes`. This allows `Bolt Mobility [CS]` to operate `365_days` while `Bolt Mobility [ACC]` operates `no_holidays`.
-- **Assignment Junction (`assignments`)**: Employees are linked to `brand_processes`, not merely brands. This captures multi-process qualification (e.g., Varun Kapoor qualified for CS and NDR). The `is_primary` flag captures primary vs. secondary staffing preference.
-- **Rules & Constraints**: Employees have independent `weekly_offs` (day of week 0–6), `leaves` (with status `approved`, `pending`, `rejected`), and `employee_availability` ranges.
+The application uses a structured data model consisting of the following logical entities:
 
----
+1. **Employees:** Employee information, pod membership and active/inactive status.
+2. **Pods:** Four operational groups with designated leads.
+3. **Brands:** Client brands with active/inactive status.
+4. **Processes:** CS, ACC, NDR and RET.
+5. **Brand Processes:** Process-specific staffing requirements and operating calendars.
+6. **Assignments:** Employee qualifications for specific brand-process combinations, including primary assignment preferences.
+7. **Weekly Offs:** Employee rest days represented using day-of-week values (0 = Sunday through 6 = Saturday).
+8. **Holidays:** Company-wide or brand-specific holidays.
+9. **Leaves:** Planned leaves and comp-offs with approval status.
+10. **Employee Availability:** Explicit date ranges when employees are unavailable.
+11. **Roster Versions:** Saved snapshots of generated or manually adjusted rosters.
+12. **Roster Entries:** Employee, brand and work-date assignments.
+13. **Roster Day Results:** Required staffing, assigned count and open/closed status.
+14. **Roster Conflicts:** Conflict codes, severity, explanations and recommendations.
 
-### Q2: How does your system generate a roster and determine whether it satisfies the required constraints?
-**Answer**:  
-The generator executes in `src/lib/scheduling/rosterEngine.js` using a deterministic bounded backtracking algorithm:
-1. **Date-by-Date Partitioning**: Because an employee's availability is date-specific, days are solved chronologically while maintaining cumulative monthly shift counts.
-2. **Hard Constraint Filtering**: For any candidate employee on date `d`, the engine validates:
-   - Active status (`is_active = true`).
-   - Not on approved leave or comp-off on date `d`.
-   - Not on designated weekly off on day-of-week of date `d`.
-   - Not blocked by explicit unavailability.
-   - Has not already been assigned to another brand on date `d` (single-brand daily cap).
-3. **Single-Resource Allocation**: For the 18 single-resource brands, if the sole employee is available, they are assigned and simultaneously cover all open eligible brand processes for that day. If unavailable, the gap is left unfilled and recorded.
-4. **Multi-Resource MRV Backtracking**: For multi-resource brands, unfilled slots are sorted by **Minimum Remaining Values (MRV)**—slots with the fewest eligible available candidates are prioritized. Candidates are sorted by soft constraints (`is_primary` first, then lowest cumulative monthly shift count).
-5. **Coverage Evaluation**: The engine compares filled shifts against required shifts (`min_staff` for open processes). If any required slot is unfilled, it flags a conflict and assigns the status `INFEASIBLE`. If all slots are filled, it assigns `FEASIBLE`. If the search step limit is hit, it assigns `SEARCH_LIMIT_REACHED`.
+### Supabase Integration Status
 
----
+Supabase client support is present in the project codebase, but the submitted demonstration is **not connected to a live Supabase database or remote authentication service**.
 
-### Q3: How did you handle the difference between single-resource brands and brands with multiple employees?
-**Answer**:  
-The system dynamically categorizes brands into two operational pools:
-- **Single-Resource Brands (18 brands, ~81.8%)**: Managed by 1 dedicated specialist. When scheduled, the employee simultaneously satisfies coverage for all open processes on that brand that they are qualified for (e.g., Vikram Patel simultaneously covers both CS and ACC for Bolt Mobility). If that specialist is on weekly off or leave, the brand has an immediate coverage deficit because no secondary specialist is assigned.
-- **Multi-Resource Brands (4 brands, ~18.2%)**: Managed by teams of 3 specialists (e.g., Stellar Luxe Apparel, Urban Nomad Gear, Terra Foods Global, Zenith Living). These brands have independent process assignments and staffing requirements (e.g., Terra Foods CS requires `min_staff: 2`). The solver uses bounded backtracking with MRV to assign specialists across processes, allowing peer specialists to maintain coverage when one team member is on leave.
+Due to the remaining development time, the application uses:
 
----
+- Bundled JavaScript seed data for the assessment dataset.
+- Browser LocalStorage for demo changes and roster snapshots.
+- A local Demo Manager session for demonstration access.
 
-### Q4: What happens when an employee manages all processes for a brand but is unavailable on a required working day?
-**Answer**:  
-When a dedicated specialist is unavailable on an open operational day (e.g., Vikram Patel taking approved leave Nov 12–14 on Bolt Mobility, or taking his mandatory Sunday weekly off on a `365_days` brand):
-1. **No Illegal Over-Allocation**: The engine refuses to violate labor laws or scheduling constraints—it does not schedule Vikram.
-2. **Deficit Calculation**: The open processes record `count: 0` against `required_staff: 1`, creating an unfilled shift.
-3. **Diagnostic Conflict Generation**: The system creates a `APPROVED_LEAVE_OR_OFF_CONFLICT` record identifying:
-   - Date, Brand, and Process.
-   - Available Staff (0) vs. Required Staff (1).
-   - Exact root cause: *"Sole assigned manager for Bolt Mobility cannot work: Vikram Patel has an Approved Leave / Comp-off."*
-   - Actionable resolution: *"Deploy unassigned backup resource (e.g., Kavya Menon) or reassign cross-pod coverage for Bolt Mobility."*
-4. **Status Reflection**: The monthly roster status is flagged as `INFEASIBLE`, and the conflict is immediately highlighted on the Roster and Conflicts pages.
+The Supabase database schema and seed-data setup were not completed or verified for this submission. Therefore, the application should not be considered a live multi-user Supabase deployment.
+
+LocalStorage is browser-specific. Changes are not synchronised between different users, browsers or devices.
 
 ---
 
-### Q5: How does your system handle conflicting requirements or insufficient staffing?
-**Answer**:  
-Rather than crashing, failing silently, or fabricating shifts:
-1. **Best-Effort Valid Partial Allocation**: The engine commits all valid shifts that can be legally staffed, ensuring maximum operational coverage without constraint violations.
-2. **Transparent Classification**: The schedule is marked with its true status:
-   - `INFEASIBLE`: Genuinely unstaffable with current resources.
-   - `SEARCH_LIMIT_REACHED`: Search cutoff reached before exhausting alternatives.
-3. **Specific Root-Cause Diagnosis**: Every failure is classified into one of 8 diagnostic codes:
-   - `NO_ASSIGNED_EMPLOYEE`
-   - `INSUFFICIENT_STAFFING`
-   - `APPROVED_LEAVE_OR_OFF_CONFLICT`
-   - `DOUBLE_BOOKING`
-   - `WEEKLY_OFF_VIOLATION`
-   - `APPROVED_LEAVE_VIOLATION`
-   - `UNAVAILABLE_RESOURCE`
-   - `CLOSED_DAY_ASSIGNMENT`
-4. **Human Decision Support**: Managers can inspect the exact deficit on the Conflicts page and use the Manual Cell Editor to reassign float backup specialists (e.g., Kavya Menon) or pod leads.
+## 4. How Roster Generation Works
+
+The scheduling logic is implemented in:
+
+`src/lib/scheduling/rosterEngine.js`
+
+It uses a deterministic, bounded constraint-satisfaction approach with a **Minimum Remaining Values (MRV)** heuristic.
+
+### Scheduling Process
+
+**1. Calendar Evaluation**
+
+The engine checks whether each brand process is operational on a particular date based on its configured operating calendar and applicable holidays.
+
+**2. Hard Constraint Filtering**
+
+An employee is excluded from allocation when:
+
+- The employee is inactive.
+- The employee is on approved leave or comp-off.
+- The employee is on a designated weekly off.
+- The employee has an explicit unavailability period.
+- The employee has already been assigned to another brand on that date.
+
+**3. Single-Resource Brand Allocation**
+
+Single-resource brands rely on a dedicated specialist. If the specialist is unavailable, the required coverage remains unfilled rather than violating scheduling constraints.
+
+**4. Multi-Resource Allocation**
+
+For multi-resource brands, the engine allocates specialists to required process slots.
+
+MRV prioritises slots with the fewest eligible candidates. Bounded backtracking explores alternative assignments within the configured search limit.
+
+**5. Workload Balancing**
+
+Candidate ordering considers primary assignment preference and cumulative monthly workload.
+
+**6. Coverage Evaluation**
+
+The engine compares assigned staff against required staff and reports the resulting coverage and scheduling status.
+
+### Roster Status
+
+| Status | Meaning |
+|---|---|
+| FEASIBLE | All required staffing slots were filled. |
+| INFEASIBLE | One or more required slots could not be filled under the current constraints. |
+| SEARCH_LIMIT_REACHED | The configured search budget was reached before feasibility could be established. |
 
 ---
 
-### Q6: Which parts of the process did you automate, and which did you leave under human control? Why?
-**Answer**:  
-- **Automated**:
-  - Operating calendar parsing (calculating open days based on `365_days`, `no_holidays`, `no_sundays_holidays`, and public holidays).
-  - Hard constraint enforcement (leave, comp-offs, weekly offs, availability blocks).
-  - Multi-process coverage calculation.
-  - Candidate ordering via MRV and fair workload balancing.
-  - Conflict detection and diagnostic root-cause generation.
-- **Left Under Human Control**:
-  - **Leave Approval**: Approving or rejecting employee leave requests.
-  - **Manual Cell Overrides**: Assigning float backup staff (Kavya Menon) or reallocating pod leads during emergencies.
-  - **Roster Publishing & Restoration**: Promoting a draft version to published status or restoring an older version snapshot.
-- **Why**: Labor allocation carries commercial and human consequences. While algorithms excel at combinatorial constraint satisfaction, client contract negotiations, emergency exceptions, and team morale require human managerial judgment.
+## 5. Conflict Detection and Handling
+
+Conflict detection is implemented in:
+
+`src/lib/scheduling/conflictDetector.js`
+
+The system identifies scheduling problems such as:
+
+- No assigned employee.
+- Insufficient staffing.
+- Approved leave or comp-off conflict.
+- Double booking.
+- Weekly-off violation.
+- Approved-leave violation.
+- Unavailable resource.
+- Assignment on a closed day.
+
+Managers can inspect the affected date, brand/process, staffing gap, explanation and suggested resolution through the Conflicts screen.
+
+The application aims to preserve valid assignments and report uncovered requirements instead of silently generating an invalid roster.
 
 ---
 
-### Q7: If the company doubled its team and brand count, what would you change about your solution?
-**Answer**:  
-If Datastraw scaled to 60+ employees, 45+ brands, and 60+ brand processes:
-1. **Parallelized Pod Solvers**: Because pods operate largely independently, we would partition the constraint satisfaction problem by operational pod and solve them in parallel via Web Workers or Supabase Edge Functions.
-2. **Virtualized Grid Rendering**: The 30-day roster matrix would be rendered using windowed virtual scrolling (`react-window`) to maintain 60 FPS scrolling with 2,000+ DOM cells.
-3. **Integer Linear Programming (ILP)**: For complex cross-pod float sharing, we could introduce a WebAssembly-compiled solver (e.g., HiGHS or GLPK via WASM) alongside the JavaScript backtracking solver for instant global optimization.
-4. **Automated Float Dispatch**: An automated recommendation engine suggesting the optimal float backup employee based on pod proximity and skill qualification.
+## 6. Manual Editing and Version History
+
+Managers can open a roster cell and add or remove employees where permitted.
+
+After a manual change:
+
+1. The updated assignment is saved.
+2. The roster is revalidated.
+3. Coverage information is updated.
+4. Any resulting conflicts are displayed.
+
+### Version History
+
+The application supports local roster snapshots.
+
+Managers can:
+
+- View saved roster versions.
+- Restore an earlier snapshot.
+- Continue working from a restored version.
+
+Since the demonstration uses LocalStorage, version history is limited to the same browser profile and device. It is not a central transactional database history.
 
 ---
 
-### Q8: If you had one additional week to work on this, what would you improve first?
-**Answer**:  
-1. **Automated One-Click "Fill Gaps with Float"**: A smart manager tool that automatically identifies the 102 uncovered shifts and schedules qualified unassigned float employees (such as Kavya Menon or available pod leads) to achieve 100% feasibility with a single click.
-2. **Shift Swapping Workflow**: A peer-to-peer shift swap portal where specialists can request shift exchanges that are automatically verified by the conflict detector before manager sign-off.
-3. **Multi-Shift Time Blocks**: Granular shift scheduling supporting morning, evening, and night shifts (24/7 coverage) rather than single daily shifts.
-4. **Automated Email/Slack Notifications**: Triggering webhook alerts to pod leads when conflicts arise or when new roster versions are published.
+## 7. Assessment Questions and Answers
+
+### Q1. How did you model employees, brands, processes, pods and their relationships?
+
+The application uses a structured relational-style data model.
+
+- **Employees and Pods:** Employees belong to operational pods.
+- **Brands and Processes:** Brands are connected to operational processes through brand-process relationships.
+- **Assignments:** Employees are assigned to specific brand-process combinations rather than only to brands. This supports employees qualified for multiple processes.
+- **Working Rules:** Weekly offs, leaves, holidays and availability are maintained separately so that the scheduling engine can evaluate each condition independently.
+
+This approach keeps employee eligibility and brand-specific staffing requirements organised.
+
+### Q2. How does your system generate a roster and determine whether it satisfies the required constraints?
+
+The engine processes dates and evaluates whether each brand process is open.
+
+It filters employees based on active status, approved leave, weekly offs, explicit unavailability and the one-brand-per-day restriction.
+
+It then allocates the required staff, using MRV and bounded backtracking for multi-resource allocation.
+
+Finally, it calculates coverage and returns a scheduling status with conflicts wherever required slots remain unfilled.
+
+### Q3. How did you handle the difference between single-resource brands and brands with multiple employees?
+
+The application supports two types of staffing arrangements:
+
+- **Single-resource brands:** Depend on one dedicated specialist. If that employee is unavailable, the shift remains uncovered.
+- **Multi-resource brands:** Have multiple qualified employees, allowing the solver to consider alternative candidates while respecting assignments and availability.
+
+This helps the system handle different staffing requirements across brands.
+
+### Q4. What happens when an employee manages all processes for a brand but is unavailable on a required working day?
+
+The scheduler does not assign an employee who is on approved leave, weekly off or explicit unavailability.
+
+If no eligible replacement is available, the system records the staffing deficit and displays the reason in the conflict view.
+
+The manager can review the issue and make a permitted manual adjustment.
+
+### Q5. How does your system handle conflicting requirements or insufficient staffing?
+
+The engine preserves valid assignments and reports uncovered staffing requirements.
+
+It distinguishes between an infeasible roster and a search-limit result.
+
+Conflict information is made available to managers so they can understand the reason for the gap and decide how to resolve it.
+
+### Q6. Which parts of the process did you automate, and which did you leave under human control? Why?
+
+**Automated:**
+
+- Operating calendar evaluation.
+- Employee eligibility checks.
+- Roster allocation.
+- Coverage calculation.
+- Conflict detection.
+- Workload-based candidate ordering.
+
+**Under human control:**
+
+- Leave approval decisions.
+- Manual roster adjustments.
+- Conflict resolution.
+- Roster review and restoration.
+
+Scheduling can be automated, but managers should retain control over important workforce decisions and exceptions.
+
+### Q7. If the company doubled its team and brand count, what would you change about your solution?
+
+For a larger deployment, I would consider:
+
+1. **Parallel Scheduling:** Divide scheduling work across independent operational groups.
+2. **Virtualised Rendering:** Use windowed rendering for large roster grids.
+3. **Integer Linear Programming:** Introduce an optimisation solver such as HiGHS or GLPK for complex staffing allocation.
+4. **Automated Backup Recommendations:** Recommend qualified backup employees based on availability and process eligibility.
+
+These are potential future improvements rather than features currently implemented.
+
+### Q8. If you had one additional week to work on this, what would you improve first?
+
+I would prioritise:
+
+1. Automated float-staff recommendations to help fill uncovered shifts.
+2. A shift-swapping workflow with manager approval.
+3. Multiple shift time blocks for morning, evening and night operations.
+4. Email or Slack notifications when conflicts arise or roster versions are published.
 
 ---
 
-## 4. November 2026 Simulation Breakdown
-
-When the baseline November 2026 assessment dataset is evaluated by the engine:
-- **Total Required Shifts**: **870**
-- **Total Filled Shifts**: **768**
-- **Uncovered Shifts**: **102**
-- **Conflict Records**: **101**
-- **Roster Entries**: **746**
-- **Coverage Percentage**: **88.28%**
-- **Status**: `INFEASIBLE`
-
-### Why Exactly 102 Shifts are Uncovered:
-1. **70 Shifts across 18 Single-Resource Brands**:
-   - Sole specialists take mandatory weekly offs (Sundays, Wednesdays, etc.) on brands operating `365_days` or `no_holidays`.
-   - Vikram Patel on Bolt Mobility takes approved leave Nov 12–14 (3 days × 2 processes = 6 shifts) and 5 Sundays (5 days × 2 processes = 10 shifts) = 16 shifts.
-   - Jive Audio, Chai Craft, EcoNest, Mythic Brews, Pulse Fitness, Dune Organics, Lumina Skincare, Aura Wellness, Glow Botanics, Krave Snacks, Nova Athleisure have 4–7 uncovered shifts each on their specialists' weekly offs.
-2. **23 Shifts across Multi-Resource Brands on Specialists' Weekly Offs**:
-   - Stellar Luxe CS (5 Sundays), Stellar Luxe ACC (4 Saturdays).
-   - Urban Nomad CS (5 Sundays), Urban Nomad ACC (5 Mondays).
-   - Zenith Living CS (5 Sundays), Zenith Living ACC (4 Wednesdays).
-3. **9 Shifts on Terra Foods Global CS (`min_staff: 2`)**:
-   - Mondays: Amit Verma (Pod Gamma Lead) is off → deficit 1 (4 shifts).
-   - Tuesdays: Sameer Qureshi is off → deficit 1 (4 shifts).
-   - Monday Nov 16: Amit is off AND Sameer has an approved comp-off → deficit 2 (1 shift with deficit 2).
-   - Total: 4 + 4 + 1 = 9 shifts.
-- **Sum**: `70 + 23 + 9 = 102 shifts across 101 conflict records`.
-
----
-
-## 5. Local Setup & Execution Instructions
+## 8. Local Setup and Execution
 
 ### Prerequisites
-- Node.js 18+ or 20+
-- npm or pnpm
 
-### 1. Clone & Install
+- Node.js 18 or newer (Node.js 20 LTS recommended).
+- npm.
+
+### Clone the Repository
+
 ```bash
-cd C:\Users\TAHER\datastraw-roster-management
+git clone https://github.com/taher28/smart-roster-management-system.git
+
+cd smart-roster-management-system
+
 npm install
 ```
 
-### 2. Environment Configuration
-Create `.env.local` using `.env.example`:
-```bash
-cp .env.example .env.local
-```
-Fill in your Supabase project credentials:
-```env
-VITE_SUPABASE_URL=https://your-supabase-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
-```
+### Start the Development Server
 
-### 3. Run Unit Tests (Vitest)
-```bash
-npm test
-```
-*Executes all 17 unit test scenarios (including the 5 acceptance criteria tests) in < 1 second.*
-
-### 4. Run Development Server
 ```bash
 npm run dev
 ```
-Open [http://localhost:5173](http://localhost:5173) in your browser.
 
-### 5. Build for Production
+Open the local URL printed by Vite, usually:
+
+`http://localhost:5173`
+
+### Demo Login
+
+1. Open the application.
+2. On the login page, click **Launch Demo Manager Session**.
+3. The application opens using the bundled assessment dataset.
+
+### Local Demo Configuration
+
+The local-only demonstration does not require a Supabase project, database setup or Supabase credentials.
+
+The Supabase client must be optional when environment variables are absent, and authentication calls must be guarded accordingly.
+
+The application should use the local Demo Manager session and LocalStorage for the demonstration.
+
+---
+
+## 9. Testing and Production Build
+
+### Run Unit Tests
+
+```bash
+npm test
+```
+
+### Create Production Build
+
 ```bash
 npm run build
 ```
-Compiles production assets to `/dist` with zero errors.
+
+The repository includes a Vitest suite covering:
+
+- Calendar rules.
+- Leave and availability checks.
+- Roster-generation scenarios.
+- Multi-process coverage.
+- Conflict detection.
+
+Run the commands on the final submitted code and report the actual results.
 
 ---
 
-## 6. Supabase Database Setup
+## 10. Demo Video and Screenshots
 
-To configure the remote database:
-1. Open your **Supabase Dashboard** (`https://supabase.com/dashboard`).
-2. Go to **SQL Editor** -> **New Query**.
-3. Copy the contents of `supabase/setup_complete.sql` and click **Run**.
-4. This script sets up:
-   - 15 relational tables with constraints and indexes.
-   - The complete 31-employee assessment dataset.
-   - Strict Row Level Security policies (authenticated read, manager-only write).
-   - Atomic transactional RPC functions `save_roster_snapshot` and `restore_roster_snapshot`.
-   - Auth trigger creating viewer profiles for new signups.
+A short walkthrough should demonstrate the main application features.
 
----
+### Suggested Demo Flow
 
-## 7. Demonstration Walkthrough Script (3–5 Minutes)
+1. Login page and Demo Manager session.
+2. Dashboard and workforce summary.
+3. Employee and pod management.
+4. Brand and process management.
+5. Assignments and working rules.
+6. Leave management.
+7. November 2026 roster generation.
+8. Company, Pod, Brand, Process and Employee views.
+9. Conflict detection and explanation.
+10. Manual roster editing and revalidation.
+11. Version history and restore.
+12. CSV export.
 
-### Minute 0:00 – 0:45 | Login & Dashboard Overview
-- Navigate to `/login`. Demonstrate the secure login interface and the instant **Demo Manager** evaluator button.
-- Arrive at the **Operations Control Center** (`/`). Show live metrics: 31 employees, 22 brands, 4 pods, 4 processes, and current coverage status.
+### Demo Video
 
-### Minute 0:45 – 1:30 | Operational Configuration Modules
-- **Employees (`/employees`)**: Search for `Kavya Menon` (the unassigned backup float specialist) and `Vikram Patel`. Show pod memberships.
-- **Brands (`/brands`)**: Highlight the distinction between single-resource brands (e.g., Bolt Mobility) and multi-resource brands (e.g., Stellar Luxe Apparel).
-- **Working Rules (`/working-rules`) & Leaves (`/leave`)**: Show employee weekly offs (e.g., Vikram Patel off on Sunday) and Vikram's approved leave on Nov 12–14.
+**Video Link:** [Add your Google Drive video link here]
 
-### Minute 1:30 – 3:00 | Roster Generation & 5 Stakeholder Views
-- Navigate to **Monthly Roster (`/roster`)** with month set to **November 2026**.
-- Click **Generate Roster**. The deterministic engine executes in ~150 ms.
-- Demonstrate the **Five Roster Views**:
-  1. *Company View*: Global matrix of all brands across November 2026.
-  2. *Pod View*: Filtered by Pod Alpha, Beta, Gamma, or Delta.
-  3. *Brand View*: Deep dive into brand coverage.
-  4. *Process View*: Breakdown across CS, ACC, NDR, and Retention.
-  5. *Employee View*: Individual specialist monthly shift schedule.
+### Suggested Screenshot Names
 
-### Minute 3:00 – 4:00 | Conflict Diagnosis & Acceptance Criteria Walkthrough
-- Notice status is `INFEASIBLE` with 88% coverage and 101 conflicts.
-- Navigate to **Conflicts (`/conflicts`)**. Filter by `Bolt Mobility`.
-- Inspect the conflict on Nov 12: Vikram Patel on approved leave. Show the exact explanation and recommendation to deploy a backup resource.
-- Inspect Terra Foods CS on Nov 16: Required 2, Available 0 (Amit on weekly off, Sameer on comp-off).
-
-### Minute 4:00 – 5:00 | Manual Adjustment, Revalidation & Version Snapshots
-- Return to **Roster (`/roster`)**. Click on Bolt Mobility on Nov 12.
-- In the **Manual Assignment Modal**, assign `Kavya Menon` (backup float resource).
-- Click **Assign**. Show real-time revalidation:
-  - Conflict count immediately drops.
-  - New **Version 2** is created atomically.
-- Open the **Historical Snapshots Drawer**. Show Version 1 (original baseline) and Version 2 (manual adjustment).
-- Demonstrate **Restore Snapshot** to restore Version 1.
-- Click **Export CSV** -> Download RFC-4180 compliant Monthly Roster CSV.
+- `01-login-demo.png`
+- `02-dashboard.png`
+- `03-employees.png`
+- `04-brands-processes.png`
+- `05-assignments-working-rules.png`
+- `06-leave-management.png`
+- `07-roster-generated.png`
+- `08-roster-filter-views.png`
+- `09-conflicts.png`
+- `10-manual-edit.png`
+- `11-version-history.png`
+- `12-csv-export.png`
 
 ---
 
-## 8. Recommended Screenshots for Documentation & Video
+## 11. Deployment
 
-1. `01_dashboard.png`: Operations Control Center displaying live statistics and pod breakdown.
-2. `02_employees.png`: Employees directory with pod assignments and active status badges.
-3. `03_brands.png`: Brands directory highlighting single vs. multi-resource tags and calendar rules.
-4. `04_working_rules.png`: Weekly offs matrix (0–6) and calendar rules editor.
-5. `05_leaves_holidays.png`: Leave management screen showing approved leaves, comp-offs, and public holidays.
-6. `06_roster_matrix.png`: Monthly roster company view across 30 days of November 2026.
-7. `07_conflicts_page.png`: Conflict inspector detailing root cause and actionable recommendations.
-8. `08_manual_edit_modal.png`: Cell assignment modal with eligibility validation and real-time revalidation.
-9. `09_version_history_drawer.png`: Historical version snapshots with 1-click restore functionality.
-10. `10_csv_export.png`: RFC-4180 CSV export files opened in spreadsheet software.
+The application is deployed on Vercel.
+
+**Live Application:**
+
+https://smart-roster-management-system-iota.vercel.app/
+
+**GitHub Repository:**
+
+https://github.com/taher28/smart-roster-management-system
+
+The deployed application should be tested to ensure that the demo login, roster generation, conflict detection and other key features work correctly.
 
 ---
 
-## 9. Submission Checklist
+## 12. Scope and Limitations
 
-- [x] Full source code repository preserved and cleaned.
-- [x] Deterministic bounded backtracking engine implemented (0 external paid AI dependencies).
-- [x] 31 employees, 22 brands, 4 pods, 4 processes, 30 brand-processes modeled.
-- [x] Exact November 2026 simulation verified (870 required, 768 filled, 102 uncovered, 101 conflicts, 746 entries, 88.28% coverage).
-- [x] 17 Vitest unit tests passing (`npm test`).
-- [x] Production build clean with 0 errors (`npm run build`).
-- [x] All 8 mandatory assessment questions answered in detail in `README.md`.
-- [x] Approach note documented in `APPROACH.md`.
-- [x] Verification & audit report documented in `VERIFICATION_REPORT.md`.
-- [x] Database migrations & setup SQL prepared in `supabase/setup_complete.sql`.
-- [x] Vercel SPA routing configured in `vercel.json`.
-- [x] `.env.example` configured with actual variable names.
+- The submitted demonstration uses bundled seed data and browser LocalStorage.
+- It is not a live multi-user database deployment.
+- Changes made in one browser are not synchronised with other browsers or devices.
+- Supabase remote database setup, authentication, RLS and PostgreSQL snapshot functionality are not completed or verified for this submission.
+- The scheduling engine uses deterministic constraint-based logic; it is not a generative-AI scheduling service.
+- Roster results depend on the current dataset and scheduling rules.
+- Any sample roster metrics should be regenerated during the final demonstration rather than assumed to match previous runs.
+
+---
+
+## 13. Submission Checklist
+
+- [ ] Live application URL included.
+- [ ] GitHub repository accessible.
+- [ ] LinkedIn profile link included.
+- [ ] Demo video recorded and uploaded.
+- [ ] Local installation instructions verified.
+- [ ] Demo Manager login tested.
+- [ ] November 2026 roster generation tested.
+- [ ] All five roster views checked.
+- [ ] Conflict detection demonstrated.
+- [ ] Manual editing and revalidation tested.
+- [ ] Local version history and restore tested.
+- [ ] CSV export tested.
+- [ ] Unit tests executed.
+- [ ] Production build completed.
+- [ ] `.env.local` and real credentials excluded from the submission ZIP.
+
+---
+
+**Developed as part of the DataStraw Technologies AI + Tech Internship Assessment.**
